@@ -228,6 +228,24 @@ def create_driver() -> webdriver.Chrome:
     return driver
 
 
+def wait_for_page_render(driver: webdriver.Chrome, timeout: int = 25) -> None:
+    """Sayfanın yüklenip DOM içinde tıklanabilir link/buton üretmesini bekler."""
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            count = driver.execute_script(
+                "return document.querySelectorAll('a, button').length;"
+            )
+            if isinstance(count, int) and count > 0:
+                return
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+
 def safe_click(driver: webdriver.Chrome, xpath: str, timeout: int = 12) -> bool:
     try:
         elem = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xpath)))
@@ -244,8 +262,8 @@ def safe_click(driver: webdriver.Chrome, xpath: str, timeout: int = 12) -> bool:
 
 
 def click_header_login(driver: webdriver.Chrome) -> bool:
-    """Önce tam XPath ile dener; olmazsa header içindeki giriş bağlantısını arar."""
-    if safe_click(driver, XPATH_HEADER_LOGIN_LINK, timeout=10):
+    """Önce tam XPath ile dener; olmazsa header/sayfa içindeki giriş bağlantısını arar."""
+    if safe_click(driver, XPATH_HEADER_LOGIN_LINK, timeout=12):
         return True
 
     fallback_xpaths = [
@@ -270,7 +288,12 @@ def click_header_login(driver: webdriver.Chrome) -> bool:
         except Exception:
             continue
 
-    print(f"[!] Giriş butonu bulunamadı | URL: {driver.current_url} | Title: {driver.title}")
+    snippet = ""
+    try:
+        snippet = driver.execute_script("return (document.body && document.body.innerText) ? document.body.innerText.slice(0, 200) : '';")
+    except Exception:
+        pass
+    print(f"[!] Giriş butonu bulunamadı | URL: {driver.current_url} | Title: {driver.title} | Body: {snippet!r}")
     return False
 
 
@@ -490,10 +513,8 @@ def run_for_account(email: str, password: str, used_nicks: set[str]) -> str:
     try:
         print(f"\n========== İŞLENEN HESAP: {email} ==========")
         driver.get(HOME_URL)
-        WebDriverWait(driver, 15).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
-        time.sleep(1.5)
+        wait_for_page_render(driver, timeout=25)
+        time.sleep(2)
 
         if not click_header_login(driver):
             raise RuntimeError(f"Giriş butonu bulunamadı/tıklanamadı (URL: {driver.current_url})")
