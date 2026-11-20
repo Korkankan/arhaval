@@ -213,7 +213,6 @@ def create_driver() -> webdriver.Chrome:
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
 
-    # Linux / Railway ortamı için gerekli bayraklar
     if os.name != "nt" or os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes"):
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
@@ -240,8 +239,39 @@ def safe_click(driver: webdriver.Chrome, xpath: str, timeout: int = 12) -> bool:
             driver.execute_script("arguments[0].click();", elem)
         return True
     except (NoSuchElementException, TimeoutException, WebDriverException) as exc:
-        print(f"[!] Tıklanamadı ({xpath}): {exc}")
+        print(f"[!] Tıklanamadı ({xpath}): {exc.__class__.__name__}")
         return False
+
+
+def click_header_login(driver: webdriver.Chrome) -> bool:
+    """Önce tam XPath ile dener; olmazsa header içindeki giriş bağlantısını arar."""
+    if safe_click(driver, XPATH_HEADER_LOGIN_LINK, timeout=10):
+        return True
+
+    fallback_xpaths = [
+        "//header//a[contains(@href, 'giris') or contains(@href, 'login') or contains(@href, 'auth') or contains(@href, 'kayit')]",
+        "//header//a[contains(translate(normalize-space(.), 'İIĞÜŞÖÇ', 'iigüsoç'), 'giris') or contains(translate(normalize-space(.), 'ABCDEFGHİIJKLMNOPQRSTUVWXYZ', 'abcdefghıijklmnopqrstuvwxyz'), 'login')]",
+        "//header//button[contains(translate(normalize-space(.), 'İIĞÜŞÖÇ', 'iigüsoç'), 'giris') or contains(translate(normalize-space(.), 'ABCDEFGHİIJKLMNOPQRSTUVWXYZ', 'abcdefghıijklmnopqrstuvwxyz'), 'login')]",
+        "//a[contains(@href, 'giris') or contains(@href, 'login') or contains(@href, 'auth')]",
+    ]
+    for xp in fallback_xpaths:
+        try:
+            elems = driver.find_elements(By.XPATH, xp)
+            for el in elems:
+                if el.is_displayed():
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                    time.sleep(0.2)
+                    try:
+                        el.click()
+                    except ElementClickInterceptedException:
+                        driver.execute_script("arguments[0].click();", el)
+                    print(f"[+] Header giriş elementi fallback ile tıklandı: {xp}")
+                    return True
+        except Exception:
+            continue
+
+    print(f"[!] Giriş butonu bulunamadı | URL: {driver.current_url} | Title: {driver.title}")
+    return False
 
 
 def check_nick_status(driver: webdriver.Chrome) -> str:
@@ -460,8 +490,13 @@ def run_for_account(email: str, password: str, used_nicks: set[str]) -> str:
     try:
         print(f"\n========== İŞLENEN HESAP: {email} ==========")
         driver.get(HOME_URL)
+        WebDriverWait(driver, 15).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        time.sleep(1.5)
 
-        safe_click(driver, XPATH_HEADER_LOGIN_LINK, timeout=15)
+        if not click_header_login(driver):
+            raise RuntimeError(f"Giriş butonu bulunamadı/tıklanamadı (URL: {driver.current_url})")
 
         email_inp = WebDriverWait(driver, 15).until(
             EC.element_to_be_clickable((By.XPATH, XPATH_EMAIL_INPUT))
@@ -477,7 +512,8 @@ def run_for_account(email: str, password: str, used_nicks: set[str]) -> str:
         pass_inp.clear()
         pass_inp.send_keys(password)
 
-        safe_click(driver, XPATH_LOGIN_SUBMIT, timeout=15)
+        if not safe_click(driver, XPATH_LOGIN_SUBMIT, timeout=15):
+            raise RuntimeError("Giriş gönder butonu tıklanamadı.")
 
         chosen_nick = set_valid_nickname(driver, used_nicks)
         safe_click(driver, XPATH_TEAM_BTN, timeout=15)
